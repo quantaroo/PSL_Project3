@@ -44,7 +44,26 @@ pred_prob <- predict(model, X_test, type = "response")
 submission <- data.frame(id = test_df$id, prob = as.vector(pred_prob))
 fwrite(submission, output_file)
 
-# Save the trained model if processing split 1
+# Save and Push Model to GitHub if processing split 1
 if (grepl("split_1", train_file)) {
-  saveRDS(model, file = "trained_model.rds")
+  model_file <- "trained_model.rds"
+  saveRDS(model, file = model_file)
+  
+  # GitHub Push Logic
+  repo_path <- "."  # Use current working directory
+  repo <- repository(repo_path)
+  
+  # Stage the model file
+  add(repo, model_file)
+  
+  # Commit changes
+  commit(repo, message = "Updated trained_model.rds after split_1 training.")
+  
+  # Push changes
+  push(repo, credentials = cred_user_pass(
+    username = Sys.getenv("GITHUB_USERNAME"),
+    password = Sys.getenv("GITHUB_PAT")
+  ))
+  
+  cat("Model pushed to GitHub successfully!\n")
 }
