@@ -20,11 +20,18 @@ tryCatch({
 # Configure Reticulate
 reticulate::py_config()
 
-# Import Python Packages
-transformers <- reticulate::import("transformers")
-torch <- reticulate::import("torch")
+# Import Python Packages Safely
+transformers <- tryCatch(
+  reticulate::import("transformers"),
+  error = function(e) stop("Error: Could not load Hugging Face Transformers.")
+)
 
-# Use CUDA if available, otherwise CPU
+torch <- tryCatch(
+  reticulate::import("torch"),
+  error = function(e) stop("Error: Could not load PyTorch.")
+)
+
+# Set Device to CUDA if Available
 device <- if (torch$cuda$is_available()) torch$device("cuda") else torch$device("cpu")
 cat(sprintf("Using device: %s\n", device$`type`))
 
@@ -38,14 +45,15 @@ get_bert_embeddings_batch <- function(texts, batch_size = 50) {
   total_texts <- length(texts)
   all_embeddings <- list()
   start_time <- Sys.time()
-  
+
   for (i in seq(1, total_texts, by = batch_size)) {
     cat(sprintf("Processing batch %d - %d of %d\n", i, min(i + batch_size - 1, total_texts), total_texts))
     
+    # Extract Batch Texts
     batch_texts <- texts[i:min(i + batch_size - 1, total_texts)]
     texts_py <- r_to_py(as.list(as.character(batch_texts)))
     
-    # Tokenize the text
+    # Tokenize Texts
     inputs <- tokenizer$batch_encode_plus(
       texts_py, 
       return_tensors = "pt", 
@@ -53,7 +61,7 @@ get_bert_embeddings_batch <- function(texts, batch_size = 50) {
       truncation = TRUE
     )
     
-    # Forward pass through BERT
+    # Forward Pass Through BERT Model
     with(torch$no_grad(), {
       outputs <- model_bert$forward(
         input_ids = inputs$input_ids$to(device), 
@@ -61,14 +69,14 @@ get_bert_embeddings_batch <- function(texts, batch_size = 50) {
       )
     })
     
-    # Extract embeddings
+    # Extract and Store Embeddings
     embeddings <- outputs$last_hidden_state$mean(dim = 2L)$detach()
     all_embeddings[[length(all_embeddings) + 1]] <- as.matrix(embeddings$cpu()$numpy())
     
-    # Clear GPU memory
+    # Clear CUDA Memory
     if (torch$cuda$is_available()) torch$cuda$empty_cache()
     
-    # Estimate remaining time
+    # Print Progress Estimate
     elapsed_time <- Sys.time() - start_time
     batches_done <- ceiling(i / batch_size)
     batches_left <- ceiling(total_texts / batch_size) - batches_done
@@ -77,8 +85,8 @@ get_bert_embeddings_batch <- function(texts, batch_size = 50) {
     
     cat(sprintf("Estimated time left: ~%.2f minutes\n", as.numeric(estimated_time_left, units = "mins")))
   }
-  
-  # Combine all batches
+
+  # Return Combined Embeddings
   do.call(rbind, all_embeddings)
 }
 
@@ -86,7 +94,7 @@ get_bert_embeddings_batch <- function(texts, batch_size = 50) {
 align_embeddings <- function(embeddings, target_dim = 1536) {
   current_dim <- ncol(embeddings)
   if (current_dim < target_dim) {
-    # Pad embeddings with zeros
+    # Pad Embeddings with Zeros
     cbind(embeddings, matrix(0, nrow = nrow(embeddings), ncol = target_dim - current_dim))
   } else {
     embeddings[, 1:target_dim]
@@ -103,7 +111,7 @@ check_input_data <- function(newdata) {
 # Prediction Function
 predict_function <- function(model, newdata) {
   check_input_data(newdata)
-  embeddings <- get_bert_embeddings_batch(newdata, batch_size = 100)
+  embeddings <- get_bert_embeddings_batch(newdata, batch_size = 50)
   aligned_embeddings <- align_embeddings(embeddings, target_dim = 1536)
   predict(model, aligned_embeddings, type = "response")
 }
