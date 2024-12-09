@@ -40,12 +40,12 @@ get_bert_embeddings_batch <- function(texts, batch_size = 100) {
   start_time <- Sys.time()
   
   for (i in seq(1, total_texts, by = batch_size)) {
-    cat(sprintf("Processing batch %d - %d of %d\n", i, min(i + batch_size - 1, total_texts), total_texts))
+    # Comment out the progress messages
+    # cat(sprintf("Processing batch %d - %d of %d\n", i, min(i + batch_size - 1, total_texts), total_texts))
     
     batch_texts <- texts[i:min(i + batch_size - 1, total_texts)]
     texts_py <- r_to_py(as.list(as.character(batch_texts)))
     
-    # Tokenize the text
     inputs <- tokenizer$batch_encode_plus(
       texts_py, 
       return_tensors = "pt", 
@@ -53,7 +53,6 @@ get_bert_embeddings_batch <- function(texts, batch_size = 100) {
       truncation = TRUE
     )
     
-    # Forward pass through BERT
     with(torch$no_grad(), {
       outputs <- model_bert$forward(
         input_ids = inputs$input_ids$to(device), 
@@ -61,21 +60,11 @@ get_bert_embeddings_batch <- function(texts, batch_size = 100) {
       )
     })
     
-    # Extract embeddings
     embeddings <- outputs$last_hidden_state$mean(dim = 2L)$detach()
     all_embeddings[[length(all_embeddings) + 1]] <- as.matrix(embeddings$cpu()$numpy())
-    
-    # Clear GPU memory
+
+    # Memory cleanup
     if (torch$cuda$is_available()) torch$cuda$empty_cache()
-    
-    # Estimate remaining time
-    elapsed_time <- Sys.time() - start_time
-    batches_done <- ceiling(i / batch_size)
-    batches_left <- ceiling(total_texts / batch_size) - batches_done
-    avg_batch_time <- elapsed_time / batches_done
-    estimated_time_left <- avg_batch_time * batches_left
-    
-    cat(sprintf("Estimated time left: ~%.2f minutes\n", as.numeric(estimated_time_left, units = "mins")))
   }
   
   # Combine all batches
