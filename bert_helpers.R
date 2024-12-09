@@ -34,7 +34,7 @@ tokenizer <- transformers$AutoTokenizer$from_pretrained("distilbert-base-uncased
 model_bert <- transformers$AutoModel$from_pretrained("distilbert-base-uncased")$to(device)
 
 # Function for Processing Text in Batches
-get_bert_embeddings_batch <- function(texts, batch_size = 100) {
+get_bert_embeddings_batch <- function(texts, batch_size = 50) {
   total_texts <- length(texts)
   all_embeddings <- list()
   start_time <- Sys.time()
