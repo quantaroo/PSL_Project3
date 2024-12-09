@@ -10,64 +10,90 @@ suppressPackageStartupMessages({
   library(reticulate)
 })
 
-# Set up the Python environment dynamically
-tryCatch({
-  reticulate::use_condaenv("bert_env", required = TRUE)
-}, error = function(e) {
-  cat("Conda environment 'bert_env' not found. Defaulting to system Python.\n")
-})
+# Function to Load Python Packages
+load_python_packages <- function() {
+  tryCatch({
+    reticulate::use_condaenv("bert_env", required = TRUE)
+  }, error = function(e) {
+    cat("Conda environment 'bert_env' not found. Defaulting to system Python.\n")
+  })
+  
+  # Configure Reticulate
+  reticulate::py_config()
+  
+  # Import Python Packages Safely
+  transformers <- tryCatch(
+    reticulate::import("transformers"),
+    error = function(e) stop("Error: Could not load Hugging Face Transformers.")
+  )
+  
+  torch <- tryCatch(
+    reticulate::import("torch"),
+    error = function(e) stop("Error: Could not load PyTorch.")
+  )
+  
+  list(transformers = transformers, torch = torch)
+}
 
-# Configure Reticulate
-reticulate::py_config()
+# Load Packages Once
+python_packages <- load_python_packages()
 
-# Import Python Packages
-transformers <- reticulate::import("transformers")
-torch <- reticulate::import("torch")
-
-# Use CUDA if available, otherwise CPU
-device <- if (torch$cuda$is_available()) torch$device("cuda") else torch$device("cpu")
+# Set Device to CUDA if Available
+device <- if (python_packages$torch$cuda$is_available()) {
+  python_packages$torch$device("cuda")
+} else {
+  python_packages$torch$device("cpu")
+}
 cat(sprintf("Using device: %s\n", device$`type`))
 
-# Load BERT Model and Tokenizer
-cat("Loading BERT model...\n")
-tokenizer <- transformers$AutoTokenizer$from_pretrained("distilbert-base-uncased")
-model_bert <- transformers$AutoModel$from_pretrained("distilbert-base-uncased")$to(device)
+# Function to Load BERT Model
+load_bert_model <- function(model_name = "distilbert-base-uncased") {
+  cat("Loading BERT model...\n")
+  
+  tokenizer <- python_packages$transformers$AutoTokenizer$from_pretrained(model_name)
+  model_bert <- python_packages$transformers$AutoModel$from_pretrained(model_name)$to(device)
+  
+  list(tokenizer = tokenizer, model_bert = model_bert)
+}
+
+# Load Model Once
+bert_model <- load_bert_model()
 
 # Function for Processing Text in Batches
 get_bert_embeddings_batch <- function(texts, batch_size = 100) {
   total_texts <- length(texts)
   all_embeddings <- list()
-  start_time <- Sys.time()
   
   for (i in seq(1, total_texts, by = batch_size)) {
-    # Comment out the progress messages
-    # cat(sprintf("Processing batch %d - %d of %d\n", i, min(i + batch_size - 1, total_texts), total_texts))
-    
+    # Select Batch
     batch_texts <- texts[i:min(i + batch_size - 1, total_texts)]
     texts_py <- r_to_py(as.list(as.character(batch_texts)))
     
-    inputs <- tokenizer$batch_encode_plus(
+    # Tokenize Text
+    inputs <- bert_model$tokenizer$batch_encode_plus(
       texts_py, 
       return_tensors = "pt", 
       padding = TRUE, 
       truncation = TRUE
     )
     
-    with(torch$no_grad(), {
-      outputs <- model_bert$forward(
+    # Forward Pass Through BERT
+    with(python_packages$torch$no_grad(), {
+      outputs <- bert_model$model_bert$forward(
         input_ids = inputs$input_ids$to(device), 
         attention_mask = inputs$attention_mask$to(device)
       )
     })
     
+    # Extract Embeddings and Detach Tensors
     embeddings <- outputs$last_hidden_state$mean(dim = 2L)$detach()
     all_embeddings[[length(all_embeddings) + 1]] <- as.matrix(embeddings$cpu()$numpy())
 
-    # Memory cleanup
-    if (torch$cuda$is_available()) torch$cuda$empty_cache()
+    # Clear GPU Memory if CUDA is Available
+    if (python_packages$torch$cuda$is_available()) python_packages$torch$cuda$empty_cache()
   }
   
-  # Combine all batches
+  # Combine All Batches
   do.call(rbind, all_embeddings)
 }
 
@@ -75,7 +101,7 @@ get_bert_embeddings_batch <- function(texts, batch_size = 100) {
 align_embeddings <- function(embeddings, target_dim = 1536) {
   current_dim <- ncol(embeddings)
   if (current_dim < target_dim) {
-    # Pad embeddings with zeros
+    # Pad Embeddings with Zeros
     cbind(embeddings, matrix(0, nrow = nrow(embeddings), ncol = target_dim - current_dim))
   } else {
     embeddings[, 1:target_dim]
