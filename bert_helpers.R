@@ -40,12 +40,12 @@ cat("Loading BERT model...\n")
 tokenizer <- transformers$AutoTokenizer$from_pretrained("distilbert-base-uncased")
 model_bert <- transformers$AutoModel$from_pretrained("distilbert-base-uncased")$to(device)
 
-# Function for Processing Text in Batches
-get_bert_embeddings_batch <- function(texts, batch_size = 50) {
+# Updated Function: Padding Embeddings Safely
+get_bert_embeddings_batch <- function(texts, batch_size = 50, target_dim = 1536) {
   total_texts <- length(texts)
   all_embeddings <- list()
   start_time <- Sys.time()
-
+  
   for (i in seq(1, total_texts, by = batch_size)) {
     cat(sprintf("Processing batch %d - %d of %d\n", i, min(i + batch_size - 1, total_texts), total_texts))
     
@@ -53,7 +53,7 @@ get_bert_embeddings_batch <- function(texts, batch_size = 50) {
     batch_texts <- texts[i:min(i + batch_size - 1, total_texts)]
     texts_py <- r_to_py(as.list(as.character(batch_texts)))
     
-    # Tokenize Texts
+    # Tokenize the Texts
     inputs <- tokenizer$batch_encode_plus(
       texts_py, 
       return_tensors = "pt", 
@@ -69,9 +69,17 @@ get_bert_embeddings_batch <- function(texts, batch_size = 50) {
       )
     })
     
-    # Extract and Store Embeddings
+    # Extract Embeddings
     embeddings <- outputs$last_hidden_state$mean(dim = 2L)$detach()
-    all_embeddings[[length(all_embeddings) + 1]] <- as.matrix(embeddings$cpu()$numpy())
+    embeddings_matrix <- as.matrix(embeddings$cpu()$numpy())
+    
+    # Ensure Correct Dimensions by Padding or Truncating
+    if (ncol(embeddings_matrix) != target_dim) {
+      embeddings_matrix <- align_embeddings(embeddings_matrix, target_dim)
+    }
+    
+    # Append Embeddings
+    all_embeddings[[length(all_embeddings) + 1]] <- embeddings_matrix
     
     # Clear CUDA Memory
     if (torch$cuda$is_available()) torch$cuda$empty_cache()
@@ -86,7 +94,7 @@ get_bert_embeddings_batch <- function(texts, batch_size = 50) {
     cat(sprintf("Estimated time left: ~%.2f minutes\n", as.numeric(estimated_time_left, units = "mins")))
   }
 
-  # Return Combined Embeddings
+  # Combine All Batches
   do.call(rbind, all_embeddings)
 }
 
